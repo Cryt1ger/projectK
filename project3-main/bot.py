@@ -33,10 +33,10 @@ async def cmd_start(message: types.Message):
 
 Что я умею:
 • Показывать прогноз погоды для точек маршрута
-• Предоставлять прогноз на несколько дней
+• Предоставляь прогноз на несколько дней
 • Отображать температуру, ветер и вероятность осадков
 
-Используйте:
+Используйте:...
 /weather - Получить прогноз погоды
 /help - Показать справку
 """
@@ -66,14 +66,15 @@ async def cmd_weather(message: types.Message, state: FSMContext):
 
 @dp.message(WeatherStates.waiting_for_start_city)
 async def process_start_city(message: types.Message, state: FSMContext):
-    # Разделяем введенный текст по запятой и очищаем от пробелов
+    # Разделя��м введенный текст по запятой и очищаем от пробелов
     cities = [city.strip() for city in message.text.split(',')]
     
     if len(cities) < 2:
         await message.answer("Пожалуйста, введите как минимум 2 города через запятую:")
         return
     
-    await state.update_data(start_city=cities[0], end_city=cities[1])
+    # Сохраняем все города в состояние
+    await state.update_data(cities=cities)
     
     keyboard = types.InlineKeyboardMarkup(
         inline_keyboard=[
@@ -97,7 +98,7 @@ async def process_days_selection(callback: types.CallbackQuery, state: FSMContex
     processing_msg = await callback.message.answer("⏳ Получаю данные о погоде...")
     
     user_data = await state.get_data()
-    if 'start_city' not in user_data or 'end_city' not in user_data:
+    if 'cities' not in user_data:
         await callback.message.answer(
             "Произошла ошибка: данные о городах не найдены.\n"
             "Пожалуйста, начните заново с команды /weather"
@@ -107,12 +108,12 @@ async def process_days_selection(callback: types.CallbackQuery, state: FSMContex
         return
 
     days = int(callback.data.split('_')[1])
-    cities = [user_data['start_city'], user_data['end_city']]
+    cities = user_data['cities']  # Получаем список всех городов
 
     try:
         weather_data = {}
         async with aiohttp.ClientSession() as session:
-            for city in cities:
+            for city in cities:  # Перебираем все города
                 api_key = "7ddc2f019ed6ac507bbf5075056a6183"
                 params = {
                     "q": city,
@@ -124,13 +125,13 @@ async def process_days_selection(callback: types.CallbackQuery, state: FSMContex
                 async with session.get("http://api.openweathermap.org/data/2.5/forecast", params=params) as response:
                     if response.status != 200:
                         error_data = await response.json()
-                        raise Exception(f"API Error: {error_data.get('message', 'Unknown error')}")
+                        raise Exception(f"API Error for {city}: {error_data.get('message', 'Unknown error')}")
                     
                     data = await response.json()
                     weather_data[city] = {
                         'forecast': [
                             {
-                                'date': datetime.fromtimestamp(item['dt']).strftime('%Y-%m-%d'),
+                                'date': item['dt_txt'],
                                 'temp': item['main']['temp'],
                                 'wind_speed': item['wind']['speed'],
                                 'precipitation': item.get('pop', 0) * 100
@@ -139,18 +140,20 @@ async def process_days_selection(callback: types.CallbackQuery, state: FSMContex
                         ]
                     }
 
-        # Создаем график температур
-        plt.figure(figsize=(10, 6))
+        # Создаем график температур для всех городов
+        plt.figure(figsize=(12, 6))  # Увеличим размер графика
         for city, data in weather_data.items():
-            dates = [datetime.strptime(d['date'], '%Y-%m-%d').strftime('%d.%m') for d in data['forecast']]
+            dates = [datetime.strptime(d['date'], '%Y-%m-%d %H:%M:%S').strftime('%d.%m %H:%M') for d in data['forecast']]
             temps = [d['temp'] for d in data['forecast']]
-            plt.plot(dates, temps, marker='o', label=city)
+            plt.plot(dates, temps, marker='o', label=city, markersize=4)  # Уменьшим размер маркеров
 
         plt.title('Прогноз температуры')
-        plt.xlabel('Дата')
+        plt.xlabel('Дата и время')
         plt.ylabel('Температура (°C)')
         plt.legend()
         plt.grid(True)
+        plt.xticks(rotation=45)  # Поворот подписей дат для лучшей читаемости
+        plt.tight_layout()  # Автоматическая подгонка графика
 
         buf = io.BytesIO()
         plt.savefig(buf, format='png')
@@ -165,7 +168,7 @@ async def process_days_selection(callback: types.CallbackQuery, state: FSMContex
         for city, data in weather_data.items():
             forecast_text = f"🌤 Прогноз погоды для {city}:\n\n"
             for day in data['forecast']:
-                date = datetime.strptime(day['date'], '%Y-%m-%d').strftime('%d.%m')
+                date = datetime.strptime(day['date'], '%Y-%m-%d %H:%M:%S').strftime('%d.%m %H:%M')
                 forecast_text += (
                     f"📅 {date}:\n"
                     f"🌡 Температура: {day['temp']}°C\n"
@@ -180,7 +183,7 @@ async def process_days_selection(callback: types.CallbackQuery, state: FSMContex
         print(f"Ошибка: {str(e)}")
         await processing_msg.delete()
         await callback.message.answer(
-            f"😔 Произошла ошибка при получении прогноза: {str(e)}\n"
+            f"😔 Произошла ошибка при получении прогно��а: {str(e)}\n"
             "Пожалуйста, проверьте названия городов и попробуйте снова."
         )
     
