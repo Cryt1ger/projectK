@@ -22,6 +22,7 @@ dp = Dispatcher(storage=storage)
 class WeatherStates(StatesGroup):
     waiting_for_start_city = State()
     waiting_for_days = State()
+    waiting_for_details = State()
 
 # Command handlers
 @dp.message(Command("start"))
@@ -66,7 +67,7 @@ async def cmd_weather(message: types.Message, state: FSMContext):
 
 @dp.message(WeatherStates.waiting_for_start_city)
 async def process_start_city(message: types.Message, state: FSMContext):
-    # Разделя��м введенный текст по запятой и очищаем от пробелов
+    # Разделяем введенный текст по запятой и очищаем от пробелов
     cities = [city.strip() for city in message.text.split(',')]
     
     if len(cities) < 2:
@@ -108,7 +109,7 @@ async def process_days_selection(callback: types.CallbackQuery, state: FSMContex
         return
 
     days = int(callback.data.split('_')[1])
-    cities = user_data['cities']  # Получаем список всех городов
+    cities = user_data['cities']
 
     try:
         weather_data = {}
@@ -140,20 +141,20 @@ async def process_days_selection(callback: types.CallbackQuery, state: FSMContex
                         ]
                     }
 
-        # Создаем график температур для всех городов
-        plt.figure(figsize=(12, 6))  # Увеличим размер графика
+        # Отправляем график
+        plt.figure(figsize=(12, 6))
         for city, data in weather_data.items():
             dates = [datetime.strptime(d['date'], '%Y-%m-%d %H:%M:%S').strftime('%d.%m %H:%M') for d in data['forecast']]
             temps = [d['temp'] for d in data['forecast']]
-            plt.plot(dates, temps, marker='o', label=city, markersize=4)  # Уменьшим размер маркеров
+            plt.plot(dates, temps, marker='o', label=city, markersize=4)
 
         plt.title('Прогноз температуры')
         plt.xlabel('Дата и время')
         plt.ylabel('Температура (°C)')
         plt.legend()
         plt.grid(True)
-        plt.xticks(rotation=45)  # Поворот подписей дат для лучшей читаемости
-        plt.tight_layout()  # Автоматическая подгонка графика
+        plt.xticks(rotation=45)
+        plt.tight_layout()
 
         buf = io.BytesIO()
         plt.savefig(buf, format='png')
@@ -165,29 +166,101 @@ async def process_days_selection(callback: types.CallbackQuery, state: FSMContex
             caption="График температур по маршруту"
         )
 
+        # Создаем краткий прогноз (средние значения за день)
         for city, data in weather_data.items():
-            forecast_text = f"🌤 Прогноз погоды для {city}:\n\n"
-            for day in data['forecast']:
-                date = datetime.strptime(day['date'], '%Y-%m-%d %H:%M:%S').strftime('%d.%m %H:%M')
-                forecast_text += (
-                    f"📅 {date}:\n"
-                    f"🌡 Температура: {day['temp']}°C\n"
-                    f"💨 Ветер: {day['wind_speed']} м/с\n"
-                    f"☔️ Осадки: {day['precipitation']}%\n\n"
-                )
-            await callback.message.answer(forecast_text)
+            # Группируем данные по дням
+            daily_data = {}
+            for item in data['forecast']:
+                date = datetime.strptime(item['date'], '%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')
+                if date not in daily_data:
+                    daily_data[date] = {
+                        'temps': [],
+                        'winds': [],
+                        'precips': []
+                    }
+                daily_data[date]['temps'].append(item['temp'])
+                daily_data[date]['winds'].append(item['wind_speed'])
+                daily_data[date]['precips'].append(item['precipitation'])
 
+            # Формируем краткий прогноз
+            summary_text = f"🌤 Прогноз погоды для {city}:\n\n"
+            for date, values in daily_data.items():
+                display_date = datetime.strptime(date, '%Y-%m-%d').strftime('%d.%m')
+                avg_temp = sum(values['temps']) / len(values['temps'])
+                avg_wind = sum(values['winds']) / len(values['winds'])
+                max_precip = max(values['precips'])
+                
+                summary_text += (
+                    f"📅 {display_date}\n"
+                    f"🌡 Температура: {avg_temp:.1f}°C\n"
+                    f"💨 Ветер: {avg_wind:.1f} м/с\n"
+                    f"☔️ Осадки: {max_precip:.0f}%\n\n"
+                )
+
+            # Создаем кнопку для подробного прогноза
+            keyboard = types.InlineKeyboardMarkup(
+                inline_keyboard=[[
+                    types.InlineKeyboardButton(
+                        text="Показать погоду с интервалами в три часа",
+                        callback_data=f"detailed_{city}"
+                    )
+                ]]
+            )
+            
+            await callback.message.answer(summary_text, reply_markup=keyboard)
+
+        # Сохраняем данные для подробного прогноза
+        await state.update_data(weather_data=weather_data)
         await processing_msg.delete()
         
     except Exception as e:
         print(f"Ошибка: {str(e)}")
         await processing_msg.delete()
         await callback.message.answer(
-            f"😔 Произошла ошибка при получении прогно��а: {str(e)}\n"
+            f"😔 Произошла ошибка при получении прогноза: {str(e)}\n"
             "Пожалуйста, проверьте названия городов и попробуйте снова."
         )
     
-    await state.clear()
+    await state.set_state(WeatherStates.waiting_for_details)
+
+# Добавляем новый обработчик для кнопки "Подробный прогноз"
+@dp.callback_query(lambda c: c.data.startswith('detailed_'))
+async def process_detailed_forecast(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    city = callback.data.split('_')[1]
+    
+    user_data = await state.get_data()
+    weather_data = user_data.get('weather_data', {})
+    
+    if city not in weather_data:
+        await callback.message.answer("Данные не найдены. Пожалуйста, запросите прогноз заново.")
+        return
+    
+    # Группируем данные по дням для более удобного отображения
+    daily_forecast = {}
+    for item in weather_data[city]['forecast']:
+        date = datetime.strptime(item['date'], '%Y-%m-%d %H:%M:%S')
+        day = date.strftime('%d.%m')
+        if day not in daily_forecast:
+            daily_forecast[day] = []
+        daily_forecast[day].append(item)
+
+    detailed_text = f"🌤 Подробный прогноз для {city}:\n\n"
+    for day, items in daily_forecast.items():
+        detailed_text += f"📅 {day}:\n"
+        for item in items:
+            time = datetime.strptime(item['date'], '%Y-%m-%d %H:%M:%S').strftime('%H:%M')
+            detailed_text += (
+                f"⏰ {time}\n"
+                f"🌡 Температура: {item['temp']:.1f}°C\n"
+                f"💨 Ветер: {item['wind_speed']:.1f} м/с\n"
+                f"☔️ Осадки: {item['precipitation']:.0f}%\n\n"
+            )
+    
+    # Разбиваем длинное сообщение на части, если нужно
+    max_length = 4096
+    for i in range(0, len(detailed_text), max_length):
+        await callback.message.answer(detailed_text[i:i+max_length])
 
 async def main():
     await dp.start_polling(bot)
