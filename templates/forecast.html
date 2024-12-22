@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Прогноз погоды</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <h1>Прогноз погоды для маршрута</h1>
+    
+    <div id="temperature-chart"></div>
+    <div id="wind-chart"></div>
+    <div id="rain-chart"></div>
+    
+    <a href="/">Назад</a>
+
+    <script>
+        const charts = {{ charts|tojson|safe }};
+        
+        Plotly.newPlot('temperature-chart', charts.temperature.data, charts.temperature.layout);
+        Plotly.newPlot('wind-chart', charts.wind.data, charts.wind.layout);
+        Plotly.newPlot('rain-chart', charts.rain.data, charts.rain.layout);
+    </script>
+</body>
+</html> 
